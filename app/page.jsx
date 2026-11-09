@@ -32,9 +32,9 @@ export default function PhotoBooth() {
   const [flashing, setFlashing] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState([]);
 
-  // Results screen state
+  // Results & Filter state: 'original' | 'bw' | 'film'
   const [selectedTheme, setSelectedTheme] = useState('white');
-  const [selectedFilter, setSelectedFilter] = useState('normal');
+  const [selectedFilter, setSelectedFilter] = useState('original');
   const [stripData, setStripData] = useState(null); // { dataUrl, blob }
   const [isGeneratingStrip, setIsGeneratingStrip] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | 'saved' | 'downloaded'
@@ -287,7 +287,7 @@ export default function PhotoBooth() {
         overflow: 'hidden',
       }}
     >
-      {/* 1. Fullscreen Live Video Stream */}
+      {/* 1. Fullscreen Live Video Stream with Real-time Filter */}
       <video
         ref={videoRef}
         playsInline
@@ -301,8 +301,9 @@ export default function PhotoBooth() {
           height: '100%',
           objectFit: 'cover',
           transform: cameraFacing === 'user' ? 'scaleX(-1)' : 'none',
+          filter: FILTERS[selectedFilter]?.filter || 'none',
           opacity: appState === 'results' ? 0.15 : 1,
-          transition: 'opacity 0.4s ease',
+          transition: 'opacity 0.4s ease, filter 0.25s ease',
           pointerEvents: 'none',
         }}
       />
@@ -430,14 +431,14 @@ export default function PhotoBooth() {
             </div>
           )}
 
-          {/* Bottom Bar: iPhone Shutter Button & Safe Area */}
+          {/* Bottom Bar: Filter selector & iPhone Shutter Button */}
           <footer
             style={{
               position: 'absolute',
               bottom: 0,
               left: 0,
               right: 0,
-              paddingBottom: 'calc(var(--safe-bottom) + 28px)',
+              paddingBottom: 'calc(var(--safe-bottom) + 24px)',
               paddingLeft: 'calc(var(--safe-left) + 20px)',
               paddingRight: 'calc(var(--safe-right) + 20px)',
               display: 'flex',
@@ -445,9 +446,59 @@ export default function PhotoBooth() {
               alignItems: 'center',
               justifyContent: 'center',
               zIndex: 30,
-              gap: '12px',
+              gap: '14px',
             }}
           >
+            {/* Filter buttons row above the shutter: Original, Black & White, Film */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'rgba(24, 24, 27, 0.72)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+                padding: '4px',
+                borderRadius: '9999px',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                pointerEvents: appState === 'capturing' ? 'none' : 'auto',
+                opacity: appState === 'capturing' ? 0.4 : 1,
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              {Object.keys(FILTERS).map((key) => {
+                const f = FILTERS[key];
+                const isSelected = selectedFilter === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setSelectedFilter(key);
+                      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                        navigator.vibrate(20);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 18px',
+                      borderRadius: '9999px',
+                      fontSize: '13px',
+                      fontWeight: isSelected ? '600' : '500',
+                      color: isSelected ? '#000000' : '#ffffff',
+                      backgroundColor: isSelected ? '#ffffff' : 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                      letterSpacing: '-0.2px',
+                      boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                    }}
+                  >
+                    {f.name}
+                  </button>
+                );
+              })}
+            </div>
+
             <p
               style={{
                 color: 'rgba(255, 255, 255, 0.75)',
@@ -578,7 +629,7 @@ export default function PhotoBooth() {
             )}
           </div>
 
-          {/* Filter options selector */}
+          {/* Filter options selector on results screen: Original, Black & White, Film */}
           <div
             style={{
               display: 'flex',
@@ -596,7 +647,7 @@ export default function PhotoBooth() {
                   key={fKey}
                   onClick={() => setSelectedFilter(fKey)}
                   style={{
-                    padding: '6px 14px',
+                    padding: '8px 18px',
                     borderRadius: '9999px',
                     fontSize: '13px',
                     fontWeight: isSelected ? '600' : '400',
