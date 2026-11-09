@@ -74,7 +74,7 @@ html, body {
 @keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(24px) scale(0.98);
+    transform: translateY(20px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -161,10 +161,16 @@ html, body {
   outline: none;
   transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
 }
 
-.shutter-btn:active {
+.shutter-btn:active:not(:disabled) {
   transform: scale(0.92);
+}
+
+.shutter-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .shutter-inner {
@@ -175,7 +181,7 @@ html, body {
   transition: transform 0.15s ease, background-color 0.2s ease;
 }
 
-.shutter-btn:active .shutter-inner {
+.shutter-btn:active:not(:disabled) .shutter-inner {
   transform: scale(0.94);
   background-color: #e5e5ea;
 }
@@ -223,6 +229,7 @@ html, body {
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
 .glass-btn:active {
@@ -236,7 +243,7 @@ html, body {
   color: #000000;
   font-weight: 600;
   font-size: 16px;
-  padding: 14px 28px;
+  padding: 13px 26px;
   border-radius: 9999px;
   border: none;
   cursor: pointer;
@@ -244,14 +251,19 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: transform 0.15s ease, background-color 0.15s ease, box-shadow 0.2s ease;
+  transition: transform 0.15s ease, background-color 0.15s ease, opacity 0.2s ease;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
   min-height: 48px;
 }
 
-.ios-btn-primary:active {
+.ios-btn-primary:active:not(:disabled) {
   transform: scale(0.96);
   background-color: #e5e5ea;
+}
+
+.ios-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .ios-btn-secondary {
@@ -261,7 +273,7 @@ html, body {
   color: #ffffff;
   font-weight: 600;
   font-size: 16px;
-  padding: 14px 24px;
+  padding: 13px 22px;
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   cursor: pointer;
@@ -273,7 +285,7 @@ html, body {
   min-height: 48px;
 }
 
-.ios-btn-secondary:active {
+.ios-btn-secondary:active:not(:disabled) {
   transform: scale(0.96);
   background: rgba(255, 255, 255, 0.24);
 }
@@ -313,7 +325,59 @@ html, body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
-/* Scrollbar hide for smooth iOS lists */
+/* Sticky Action Bar at Bottom of Results */
+.results-bottom-bar {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(9, 9, 11, 0.88);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 10px;
+  padding-bottom: max(var(--safe-bottom), 16px);
+  padding-left: max(var(--safe-left), 16px);
+  padding-right: max(var(--safe-right), 16px);
+  z-index: 60;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Responsive Landscape on Mobile */
+@media (orientation: landscape) and (max-height: 550px) {
+  .camera-footer {
+    position: absolute !important;
+    right: max(var(--safe-right), 16px) !important;
+    top: 50% !important;
+    bottom: auto !important;
+    left: auto !important;
+    transform: translateY(-50%) !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+    padding: 0 !important;
+    z-index: 40 !important;
+  }
+
+  .countdown-number {
+    font-size: 72px !important;
+  }
+
+  .camera-header {
+    padding-top: max(var(--safe-top), 8px) !important;
+    padding-left: max(var(--safe-left), 16px) !important;
+  }
+
+  .results-main-layout {
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 20px !important;
+  }
+}
+
+/* Scrollbar hide */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }

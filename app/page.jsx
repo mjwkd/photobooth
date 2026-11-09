@@ -11,10 +11,11 @@ import {
   X,
   Film,
   LayoutGrid,
-  Square
+  Square,
+  AlertCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { playCountdownBeep, playShutterSound, playPrintSound } from '../lib/audio';
+import { playCountdownBeep, playShutterSound, playPrintSound, stopAllAudio } from '../lib/audio';
 import { generatePhotoStrip, FRAME_THEMES, FILTERS, LAYOUTS } from '../lib/stripGenerator';
 
 export default function PhotoBooth() {
@@ -41,14 +42,17 @@ export default function PhotoBooth() {
   const [stripData, setStripData] = useState(null); // { dataUrl, blob }
   const [isGeneratingStrip, setIsGeneratingStrip] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null); // null | 'saved' | 'downloaded'
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null); // null | 'saved' | 'downloaded' | 'error'
 
-  // Domestic references
+  // References
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const isCapturingRef = useRef(false);
+  const cancelCaptureRef = useRef(false);
+  const isSavingRef = useRef(false);
 
-  // Initialize camera stream
+  // Initialize camera stream with high resolution constraints
   const startCamera = useCallback(async (facing = cameraFacing) => {
     try {
       setPermissionError(null);
@@ -63,8 +67,8 @@ export default function PhotoBooth() {
         audio: false,
         video: {
           facingMode: { ideal: facing },
-          width: { ideal: 1280 },
-          height: { ideal: 1920 },
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 2560, min: 1920 },
         },
       };
 
@@ -107,46 +111,94 @@ export default function PhotoBooth() {
     };
   }, [startCamera]);
 
-  // Capture a single frame from the live video onto a canvas
+  // Edge Case 3 Fix: Handle leaving the app mid-countdown (tab switch, minimize, lock)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (isCapturingRef.current) {
+          cancelCaptureRef.current = true;
+          isCapturingRef.current = false;
+          stopAllAudio();
+          setCountdown(null);
+          setFlashing(false);
+          setAppState('camera');
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handleVisibilityChange);
+    };
+  }, []);
+
+  // Edge Case 4 Fix: High-resolution frame capture without quality downsampling
   const captureFrame = useCallback(() => {
     const video = videoRef.current;
     if (!video) return null;
 
-    const width = video.videoWidth || 1280;
-    const height = video.videoHeight || 960;
+    const width = video.videoWidth || 1920;
+    const height = video.videoHeight || 1440;
 
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
 
-    // If front camera, mirror horizontally so saved photo matches preview
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Mirror front camera horizontally
     if (cameraFacing === 'user') {
       ctx.translate(width, 0);
       ctx.scale(-1, 1);
     }
 
     ctx.drawImage(video, 0, 0, width, height);
-    return canvas.toDataURL('image/jpeg', 0.95);
+    // Use lossless PNG or max quality JPEG for the intermediate shot buffer
+    return canvas.toDataURL('image/png');
   }, [cameraFacing]);
 
-  // Start the 4-shot sequence
+  // Start the 4-shot sequence with cancel-protection
   const startBoothSequence = async () => {
     if (!cameraReady || isCapturingRef.current) return;
 
     isCapturingRef.current = true;
+    cancelCaptureRef.current = false;
     setAppState('capturing');
     setCapturedPhotos([]);
     const photos = [];
 
     for (let shot = 0; shot < 4; shot++) {
+      if (cancelCaptureRef.current) {
+        isCapturingRef.current = false;
+        stopAllAudio();
+        return;
+      }
+
       setCurrentShotIndex(shot);
 
       // Countdown: 3, 2, 1
       for (let count = 3; count >= 1; count--) {
+        if (cancelCaptureRef.current) {
+          isCapturingRef.current = false;
+          stopAllAudio();
+          return;
+        }
+
         setCountdown(count);
         playCountdownBeep(count === 1);
         await new Promise((r) => setTimeout(r, 850));
+      }
+
+      if (cancelCaptureRef.current) {
+        isCapturingRef.current = false;
+        stopAllAudio();
+        return;
       }
 
       setCountdown(null);
@@ -170,6 +222,12 @@ export default function PhotoBooth() {
       if (shot < 3) {
         await new Promise((r) => setTimeout(r, 900));
       }
+    }
+
+    if (cancelCaptureRef.current) {
+      isCapturingRef.current = false;
+      stopAllAudio();
+      return;
     }
 
     isCapturingRef.current = false;
@@ -232,6 +290,9 @@ export default function PhotoBooth() {
 
   // Retake photos
   const handleRetake = () => {
+    cancelCaptureRef.current = true;
+    isCapturingRef.current = false;
+    stopAllAudio();
     setCapturedPhotos([]);
     setStripData(null);
     setSaveStatus(null);
@@ -250,39 +311,47 @@ export default function PhotoBooth() {
     }, 1900);
   };
 
-  // Save handler (Web Share API for iPhone Save Image, Download fallback for laptop)
+  // Edge Case 5 Fix: Guard against saving twice & handle permission rejection
   const handleSave = async () => {
-    if (!stripData?.blob) return;
+    if (isSavingRef.current || isSaving || !stripData?.blob) return;
+
+    isSavingRef.current = true;
+    setIsSaving(true);
+    setSaveStatus(null);
 
     const fileName = `photobooth-${selectedLayout}-${new Date().toISOString().slice(0, 10)}.png`;
     const file = new File([stripData.blob], fileName, { type: 'image/png' });
 
-    // 1. Try mobile native share sheet with file (iPhone Safari / Android)
-    if (
-      typeof navigator !== 'undefined' &&
-      navigator.canShare &&
-      navigator.canShare({ files: [file] })
-    ) {
-      try {
-        await navigator.share({
-          files: [file],
-          title: 'My Photo Booth Print',
-          text: 'Captured with Pocket Photo Booth!',
-        });
-        setSaveStatus('saved');
-        setTimeout(() => setSaveStatus(null), 3000);
-        return;
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          console.warn('Share sheet failed, falling back to download:', err);
-        } else {
+    try {
+      // 1. Mobile native share sheet with file (iPhone Safari / Android)
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.canShare &&
+        navigator.canShare({ files: [file] })
+      ) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'My Photo Booth Print',
+            text: 'Captured with Pocket Photo Booth!',
+          });
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus(null), 3000);
           return;
+        } catch (err) {
+          // User dismissed or canceled share sheet cleanly
+          if (err.name === 'AbortError') {
+            return;
+          }
+          // Another share in progress: ignore double trigger
+          if (err.name === 'InvalidStateError') {
+            return;
+          }
+          console.warn('Share sheet failed:', err);
         }
       }
-    }
 
-    // 2. Fallback: Trigger direct image download for desktop / laptop
-    try {
+      // 2. Direct image download for desktop / laptop
       const a = document.createElement('a');
       a.href = stripData.dataUrl;
       a.download = fileName;
@@ -292,17 +361,22 @@ export default function PhotoBooth() {
       setSaveStatus('downloaded');
       setTimeout(() => setSaveStatus(null), 3000);
     } catch (err) {
-      console.error('Download failed:', err);
+      console.error('Save failed:', err);
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus(null), 3500);
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
     }
   };
 
-  // Demo mode photos (for testing without webcam or in simulator)
+  // Demo mode photos
   const loadDemoPhotos = () => {
     const demoSvgs = [
-      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="100%" height="100%" fill="%23f43f5e"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="48" font-family="sans-serif">📸 Smile 1</text></svg>',
-      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="100%" height="100%" fill="%238b5cf6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="48" font-family="sans-serif">✌️ Peace 2</text></svg>',
-      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="100%" height="100%" fill="%230ea5e9"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="48" font-family="sans-serif">😎 Fun 3</text></svg>',
-      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="100%" height="100%" fill="%2310b981"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="48" font-family="sans-serif">✨ Pout 4</text></svg>',
+      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="900" height="675" viewBox="0 0 900 675"><rect width="100%" height="100%" fill="%23f43f5e"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="64" font-family="sans-serif">📸 Smile 1</text></svg>',
+      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="900" height="675" viewBox="0 0 900 675"><rect width="100%" height="100%" fill="%238b5cf6"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="64" font-family="sans-serif">✌️ Peace 2</text></svg>',
+      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="900" height="675" viewBox="0 0 900 675"><rect width="100%" height="100%" fill="%230ea5e9"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="64" font-family="sans-serif">😎 Fun 3</text></svg>',
+      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="900" height="675" viewBox="0 0 900 675"><rect width="100%" height="100%" fill="%2310b981"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="64" font-family="sans-serif">✨ Pout 4</text></svg>',
     ];
     setCapturedPhotos(demoSvgs);
     setAppState('results');
@@ -359,6 +433,7 @@ export default function PhotoBooth() {
         <>
           {/* Top Bar respecting iOS Safe Area */}
           <header
+            className="camera-header"
             style={{
               position: 'absolute',
               top: 0,
@@ -465,6 +540,7 @@ export default function PhotoBooth() {
 
           {/* Bottom Bar: Filter Selector & iPhone Shutter Button */}
           <footer
+            className="camera-footer"
             style={{
               position: 'absolute',
               bottom: 0,
@@ -555,7 +631,7 @@ export default function PhotoBooth() {
         </>
       )}
 
-      {/* 4. Results Screen: Layout Picker, Printer Slot Animation & Save */}
+      {/* 4. Results Screen: Layout Picker, Printer Slot Animation & Sticky Save Bar */}
       {appState === 'results' && (
         <div
           className="results-enter"
@@ -568,7 +644,6 @@ export default function PhotoBooth() {
             zIndex: 50,
             overflowY: 'auto',
             paddingTop: 'calc(var(--safe-top) + 12px)',
-            paddingBottom: 'calc(var(--safe-bottom) + 20px)',
             paddingLeft: 'calc(var(--safe-left) + 16px)',
             paddingRight: 'calc(var(--safe-right) + 16px)',
           }}
@@ -721,7 +796,7 @@ export default function PhotoBooth() {
               alignItems: 'center',
               justifyContent: 'flex-start',
               padding: '4px 0',
-              minHeight: '360px',
+              minHeight: '340px',
               position: 'relative',
               overflow: 'hidden',
             }}
@@ -745,7 +820,7 @@ export default function PhotoBooth() {
                   className={isPrinting ? 'paper-emerge' : ''}
                   style={{
                     position: 'relative',
-                    maxHeight: selectedLayout === 'strip' ? '56vh' : '50vh',
+                    maxHeight: selectedLayout === 'strip' ? '54vh' : '48vh',
                     boxShadow: '0 20px 48px -10px rgba(0,0,0,0.9), 0 0 1px 1px rgba(255,255,255,0.15)',
                     borderRadius: '6px',
                     overflow: 'hidden',
@@ -758,7 +833,7 @@ export default function PhotoBooth() {
                     alt="Photo booth print"
                     style={{
                       display: 'block',
-                      maxHeight: selectedLayout === 'strip' ? '56vh' : '50vh',
+                      maxHeight: selectedLayout === 'strip' ? '54vh' : '48vh',
                       width: 'auto',
                       objectFit: 'contain',
                       borderRadius: '4px',
@@ -780,7 +855,7 @@ export default function PhotoBooth() {
               display: 'flex',
               justifyContent: 'center',
               gap: '6px',
-              margin: '8px 0 12px 0',
+              margin: '8px 0 10px 0',
               flexShrink: 0,
             }}
           >
@@ -809,20 +884,13 @@ export default function PhotoBooth() {
             })}
           </div>
 
-          {/* Action Buttons: Save (Share/Photos) & Retake */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-              flexShrink: 0,
-            }}
-          >
+          {/* Edge Case 6 Fix: Sticky Bottom Bar (never hidden behind the home bar) */}
+          <div className="results-bottom-bar">
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button
                 onClick={handleRetake}
                 className="ios-btn-secondary"
-                style={{ flex: 1, maxWidth: '150px' }}
+                style={{ flex: 1, maxWidth: '140px' }}
               >
                 <RotateCcw size={18} />
                 <span>Retake</span>
@@ -830,14 +898,29 @@ export default function PhotoBooth() {
 
               <button
                 onClick={handleSave}
-                disabled={!stripData || isGeneratingStrip}
+                disabled={!stripData || isGeneratingStrip || isSaving}
                 className="ios-btn-primary"
                 style={{ flex: 2, maxWidth: '240px' }}
               >
-                {saveStatus ? (
+                {isSaving ? (
+                  <>
+                    <RefreshCw size={18} className="animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : saveStatus === 'saved' ? (
                   <>
                     <Check size={20} color="#34c759" />
-                    <span>{saveStatus === 'saved' ? 'Saved to Photos!' : 'Downloaded!'}</span>
+                    <span>Saved to Photos!</span>
+                  </>
+                ) : saveStatus === 'downloaded' ? (
+                  <>
+                    <Check size={20} color="#34c759" />
+                    <span>Downloaded!</span>
+                  </>
+                ) : saveStatus === 'error' ? (
+                  <>
+                    <AlertCircle size={20} color="#ff3b30" />
+                    <span>Save Failed</span>
                   </>
                 ) : (
                   <>
@@ -853,7 +936,6 @@ export default function PhotoBooth() {
                 textAlign: 'center',
                 color: 'rgba(255, 255, 255, 0.5)',
                 fontSize: '11px',
-                marginTop: '2px',
               }}
             >
               On iPhone, tap &ldquo;Save Image&rdquo; in the share sheet to add to Photos.
@@ -862,7 +944,7 @@ export default function PhotoBooth() {
         </div>
       )}
 
-      {/* 5. Camera Permission Denied / Error Screen */}
+      {/* 5. Camera Permission Denied / Error Screen (Edge Case 1 Fix: Auto reload & clear guide) */}
       {appState === 'denied' && (
         <div
           style={{
@@ -937,15 +1019,22 @@ export default function PhotoBooth() {
                 Tap <strong>Website Settings</strong> &gt; <strong>Camera</strong>
               </li>
               <li>
-                Select <strong>Allow</strong>, then tap Try Again below
+                Select <strong>Allow</strong>, then tap <strong>Reload &amp; Try Again</strong> below
               </li>
             </ol>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%', maxWidth: '280px' }}>
-            <button onClick={() => startCamera()} className="ios-btn-primary">
+            <button
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.location.reload();
+                }
+              }}
+              className="ios-btn-primary"
+            >
               <RefreshCw size={18} />
-              <span>Try Again</span>
+              <span>Reload &amp; Try Again</span>
             </button>
 
             <button
