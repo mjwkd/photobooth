@@ -19,8 +19,8 @@ import {
 import confetti from 'canvas-confetti';
 import { playCountdownBeep, playShutterSound, playPrintSound, stopAllAudio } from '../lib/audio';
 import { generatePhotoStrip, FRAME_THEMES, FILTERS, LAYOUTS } from '../lib/stripGenerator';
-import { BACKDROPS } from '../lib/backdrops';
-import { getSegmenter, compositeBackdropFrame } from '../lib/backgroundSegmenter';
+import { EFFECTS } from '../lib/backdrops';
+import { compositeBackdropFrame } from '../lib/backgroundSegmenter';
 
 export default function PhotoBooth() {
   // App states: 'camera' | 'capturing' | 'results' | 'denied'
@@ -35,9 +35,9 @@ export default function PhotoBooth() {
   const [flashing, setFlashing] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState([]);
 
-  // Effects & Customization state
-  const [activeEffectTab, setActiveEffectTab] = useState('backdrops'); // 'backdrops' | 'filters'
-  const [selectedBackdrop, setSelectedBackdrop] = useState('fish'); // Default to 'fish' (like user's request!)
+  // Live Effect & Customization state
+  // Default to 'fish' (classic macOS Photo Booth live underwater aquarium with swimming fish!)
+  const [selectedEffect, setSelectedEffect] = useState('fish');
   const [selectedFilter, setSelectedFilter] = useState('original'); // 'original' | 'bw' | 'film'
   const [selectedTheme, setSelectedTheme] = useState('white');
   const [selectedLayout, setSelectedLayout] = useState('strip'); // 'strip' | 'grid' | 'polaroid'
@@ -109,15 +109,9 @@ export default function PhotoBooth() {
     await startCamera(nextFacing);
   };
 
-  // Start camera on mount & pre-warm AI segmenter
+  // Start camera on mount
   useEffect(() => {
     startCamera();
-    setIsBackdropLoading(true);
-    getSegmenter().then(() => {
-      setIsBackdropLoading(false);
-    }).catch(() => {
-      setIsBackdropLoading(false);
-    });
 
     return () => {
       if (streamRef.current) {
@@ -126,50 +120,49 @@ export default function PhotoBooth() {
     };
   }, [startCamera]);
 
-  // Live Backdrop Compositing Loop (runs at 60 FPS via requestAnimationFrame)
+  // Live Camera & Effect Compositing Loop (runs at full 60 FPS via requestAnimationFrame)
+  // Everything you see on the screen is rendered live directly on the canvas!
   useEffect(() => {
     let animId;
     let isActive = true;
 
-    if (selectedBackdrop !== 'none') {
-      const renderLoop = () => {
-        if (!isActive) return;
+    const renderLoop = () => {
+      if (!isActive) return;
 
-        if (
-          videoRef.current &&
-          backdropCanvasRef.current &&
-          videoRef.current.readyState >= 2
-        ) {
-          const video = videoRef.current;
-          const canvas = backdropCanvasRef.current;
-          const targetW = video.videoWidth || 1280;
-          const targetH = video.videoHeight || 960;
+      if (
+        videoRef.current &&
+        backdropCanvasRef.current &&
+        videoRef.current.readyState >= 2
+      ) {
+        const video = videoRef.current;
+        const canvas = backdropCanvasRef.current;
+        const targetW = video.videoWidth || 1280;
+        const targetH = video.videoHeight || 960;
 
-          if (canvas.width !== targetW || canvas.height !== targetH) {
-            canvas.width = targetW;
-            canvas.height = targetH;
-          }
-
-          compositeBackdropFrame({
-            video,
-            targetCanvas: canvas,
-            backdropId: selectedBackdrop,
-            time: performance.now() / 1000,
-            facing: cameraFacing,
-          });
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
         }
 
-        animId = requestAnimationFrame(renderLoop);
-      };
+        compositeBackdropFrame({
+          video,
+          targetCanvas: canvas,
+          backdropId: selectedEffect,
+          time: performance.now() / 1000,
+          facing: cameraFacing,
+        });
+      }
 
       animId = requestAnimationFrame(renderLoop);
-    }
+    };
+
+    animId = requestAnimationFrame(renderLoop);
 
     return () => {
       isActive = false;
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [selectedBackdrop, cameraFacing]);
+  }, [selectedEffect, cameraFacing]);
 
   // Handle leaving the app mid-countdown
   useEffect(() => {
@@ -195,9 +188,9 @@ export default function PhotoBooth() {
     };
   }, []);
 
-  // High-resolution frame capture (using backdrop composite canvas if active, or video feed)
+  // High-resolution frame capture: grabs the live composited canvas directly (WYSIWYG)
   const captureFrame = useCallback(() => {
-    if (selectedBackdrop !== 'none' && backdropCanvasRef.current) {
+    if (backdropCanvasRef.current) {
       return backdropCanvasRef.current.toDataURL('image/png');
     }
 
@@ -223,7 +216,7 @@ export default function PhotoBooth() {
 
     ctx.drawImage(video, 0, 0, width, height);
     return canvas.toDataURL('image/png');
-  }, [cameraFacing, selectedBackdrop]);
+  }, [cameraFacing]);
 
   // Start 4-shot sequence
   const startBoothSequence = async () => {
@@ -446,7 +439,7 @@ export default function PhotoBooth() {
         overflow: 'hidden',
       }}
     >
-      {/* 1. Fullscreen Live Video Stream (Always mounted) */}
+      {/* 1. Fullscreen Live Video Stream (Decoding frames for canvas in background) */}
       <video
         ref={videoRef}
         playsInline
@@ -459,16 +452,13 @@ export default function PhotoBooth() {
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          transform: cameraFacing === 'user' ? 'scaleX(-1)' : 'none',
-          filter: FILTERS[selectedFilter]?.filter || 'none',
-          opacity: selectedBackdrop === 'none' && appState !== 'results' ? 1 : 0.08,
-          transition: 'opacity 0.3s ease, filter 0.25s ease',
+          opacity: 0.001,
           pointerEvents: 'none',
-          zIndex: 5,
+          zIndex: 1,
         }}
       />
 
-      {/* 2. Virtual Backdrop Live Compositing Canvas (Active when backdrop !== 'none') */}
+      {/* 2. Fullscreen 60 FPS Live Camera & Effects Canvas */}
       <canvas
         ref={backdropCanvasRef}
         style={{
@@ -478,47 +468,41 @@ export default function PhotoBooth() {
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          filter: FILTERS[selectedFilter]?.filter || 'none',
-          opacity: selectedBackdrop !== 'none' && appState !== 'results' ? 1 : 0,
-          transition: 'opacity 0.3s ease, filter 0.25s ease',
+          opacity: appState !== 'results' ? 1 : 0,
+          transition: 'opacity 0.25s ease',
           pointerEvents: 'none',
           zIndex: 10,
         }}
       />
 
-      {/* 3. Photo Booth Active Backdrop Label (e.g., "Fish" just like user's screenshot) */}
-      {selectedBackdrop !== 'none' && appState === 'camera' && (
+      {/* 3. Photo Booth Active Effect Label (e.g. "🐠 Fish") */}
+      {selectedEffect !== 'original' && appState === 'camera' && (
         <div
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--safe-bottom) + 158px)',
+            bottom: 'calc(var(--safe-bottom) + 148px)',
             left: '50%',
             transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backgroundColor: 'rgba(0, 0, 0, 0.68)',
             backdropFilter: 'blur(16px)',
             WebkitBackdropFilter: 'blur(16px)',
             border: '1px solid rgba(255, 255, 255, 0.2)',
             borderRadius: '9999px',
-            padding: '4px 14px',
+            padding: '5px 16px',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: '7px',
             zIndex: 25,
             color: '#ffffff',
             fontSize: '13px',
             fontWeight: '600',
-            letterSpacing: '0.5px',
+            letterSpacing: '0.4px',
             pointerEvents: 'none',
-            textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
           }}
         >
-          <span>{BACKDROPS[selectedBackdrop]?.icon}</span>
-          <span>{BACKDROPS[selectedBackdrop]?.name}</span>
-          {isBackdropLoading && (
-            <span style={{ fontSize: '11px', color: '#ffd60a', marginLeft: '4px' }}>
-              (AI loading...)
-            </span>
-          )}
+          <span>{EFFECTS[selectedEffect]?.icon}</span>
+          <span>{EFFECTS[selectedEffect]?.name}</span>
         </div>
       )}
 
@@ -663,173 +647,61 @@ export default function PhotoBooth() {
               gap: '10px',
             }}
           >
-            {/* Effect Mode Tabs: [ 🖼️ Backdrops ]  [ 🎨 Filters ] */}
+            {/* Unified 1-Tap Live Effect Selector Row: Original, Fish 🐠, Space 🪐, Sunset 🌅, Cyber 🌆, B&W, Film */}
             <div
+              className="no-scrollbar"
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                backgroundColor: 'rgba(18, 18, 20, 0.75)',
-                backdropFilter: 'blur(25px)',
-                WebkitBackdropFilter: 'blur(25px)',
-                padding: '3px',
+                gap: '6px',
+                backgroundColor: 'rgba(24, 24, 27, 0.75)',
+                backdropFilter: 'blur(22px)',
+                WebkitBackdropFilter: 'blur(22px)',
+                padding: '4px 6px',
                 borderRadius: '9999px',
-                border: '1px solid rgba(255, 255, 255, 0.16)',
-                gap: '4px',
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.45)',
+                maxWidth: '94vw',
+                overflowX: 'auto',
                 pointerEvents: appState === 'capturing' ? 'none' : 'auto',
                 opacity: appState === 'capturing' ? 0.3 : 1,
               }}
             >
-              <button
-                onClick={() => setActiveEffectTab('backdrops')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '5px 14px',
-                  borderRadius: '9999px',
-                  border: 'none',
-                  background: activeEffectTab === 'backdrops' ? '#ffffff' : 'transparent',
-                  color: activeEffectTab === 'backdrops' ? '#000000' : 'rgba(255,255,255,0.7)',
-                  fontSize: '12px',
-                  fontWeight: activeEffectTab === 'backdrops' ? '600' : '500',
-                  cursor: 'pointer',
-                  transition: 'all 0.18s ease',
-                }}
-              >
-                <ImageIcon size={13} />
-                <span>Backdrops</span>
-              </button>
-
-              <button
-                onClick={() => setActiveEffectTab('filters')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '5px 14px',
-                  borderRadius: '9999px',
-                  border: 'none',
-                  background: activeEffectTab === 'filters' ? '#ffffff' : 'transparent',
-                  color: activeEffectTab === 'filters' ? '#000000' : 'rgba(255,255,255,0.7)',
-                  fontSize: '12px',
-                  fontWeight: activeEffectTab === 'filters' ? '600' : '500',
-                  cursor: 'pointer',
-                  transition: 'all 0.18s ease',
-                }}
-              >
-                <Palette size={13} />
-                <span>Filters</span>
-              </button>
+              {Object.keys(EFFECTS).map((key) => {
+                const eff = EFFECTS[key];
+                const isSelected = selectedEffect === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      setSelectedEffect(key);
+                      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                        navigator.vibrate(18);
+                      }
+                    }}
+                    style={{
+                      padding: '7px 15px',
+                      borderRadius: '9999px',
+                      fontSize: '13px',
+                      fontWeight: isSelected ? '600' : '500',
+                      color: isSelected ? '#000000' : '#ffffff',
+                      backgroundColor: isSelected ? '#ffffff' : 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                      boxShadow: isSelected ? '0 2px 10px rgba(255,255,255,0.3)' : 'none',
+                    }}
+                  >
+                    <span>{eff.icon}</span>
+                    <span>{eff.name}</span>
+                  </button>
+                );
+              })}
             </div>
-
-            {/* Option Pills Row based on Active Tab */}
-            {activeEffectTab === 'backdrops' ? (
-              /* Virtual Backdrops Row: None | 🐠 Fish | 🪐 Space | 🌅 Sunset | 🌆 Cyber | ☁️ Clouds */
-              <div
-                className="no-scrollbar"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  backgroundColor: 'rgba(24, 24, 27, 0.8)',
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  padding: '4px 6px',
-                  borderRadius: '9999px',
-                  border: '1px solid rgba(255, 255, 255, 0.18)',
-                  boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
-                  maxWidth: '92vw',
-                  overflowX: 'auto',
-                  pointerEvents: appState === 'capturing' ? 'none' : 'auto',
-                  opacity: appState === 'capturing' ? 0.3 : 1,
-                }}
-              >
-                {Object.keys(BACKDROPS).map((key) => {
-                  const b = BACKDROPS[key];
-                  const isSelected = selectedBackdrop === key;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => {
-                        setSelectedBackdrop(key);
-                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                          navigator.vibrate(18);
-                        }
-                      }}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '9999px',
-                        fontSize: '12px',
-                        fontWeight: isSelected ? '600' : '500',
-                        color: isSelected ? '#000000' : '#ffffff',
-                        backgroundColor: isSelected ? '#ffffff' : 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-                        boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                      }}
-                    >
-                      <span>{b.icon}</span>
-                      <span>{b.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              /* Filters Row: Original | Black & White | Film */
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  backgroundColor: 'rgba(24, 24, 27, 0.8)',
-                  backdropFilter: 'blur(20px)',
-                  WebkitBackdropFilter: 'blur(20px)',
-                  padding: '4px',
-                  borderRadius: '9999px',
-                  border: '1px solid rgba(255, 255, 255, 0.18)',
-                  boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
-                  pointerEvents: appState === 'capturing' ? 'none' : 'auto',
-                  opacity: appState === 'capturing' ? 0.3 : 1,
-                }}
-              >
-                {Object.keys(FILTERS).map((key) => {
-                  const f = FILTERS[key];
-                  const isSelected = selectedFilter === key;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => {
-                        setSelectedFilter(key);
-                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                          navigator.vibrate(18);
-                        }
-                      }}
-                      style={{
-                        padding: '7px 16px',
-                        borderRadius: '9999px',
-                        fontSize: '12px',
-                        fontWeight: isSelected ? '600' : '500',
-                        color: isSelected ? '#000000' : '#ffffff',
-                        backgroundColor: isSelected ? '#ffffff' : 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-                        letterSpacing: '-0.2px',
-                        boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                      }}
-                    >
-                      {f.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
 
             <button
               onClick={startBoothSequence}
