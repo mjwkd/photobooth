@@ -4,20 +4,18 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Camera,
   RotateCcw,
-  Download,
   Share2,
   Sparkles,
   RefreshCw,
-  AlertCircle,
   Check,
-  Smartphone,
-  Eye,
-  Sliders,
-  X
+  X,
+  Film,
+  LayoutGrid,
+  Square
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { playCountdownBeep, playShutterSound } from '../lib/audio';
-import { generatePhotoStrip, FRAME_THEMES, FILTERS } from '../lib/stripGenerator';
+import { playCountdownBeep, playShutterSound, playPrintSound } from '../lib/audio';
+import { generatePhotoStrip, FRAME_THEMES, FILTERS, LAYOUTS } from '../lib/stripGenerator';
 
 export default function PhotoBooth() {
   // App states: 'camera' | 'capturing' | 'results' | 'denied'
@@ -32,11 +30,17 @@ export default function PhotoBooth() {
   const [flashing, setFlashing] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState([]);
 
-  // Results & Filter state: 'original' | 'bw' | 'film'
+  // Results screen customizations
+  const [selectedLayout, setSelectedLayout] = useState('strip'); // 'strip' | 'grid' | 'polaroid'
   const [selectedTheme, setSelectedTheme] = useState('white');
-  const [selectedFilter, setSelectedFilter] = useState('original');
+  const [selectedFilter, setSelectedFilter] = useState('original'); // 'original' | 'bw' | 'film'
+  const [polaroidCaption, setPolaroidCaption] = useState('best memories ♥');
+  const [polaroidShotIndex, setPolaroidShotIndex] = useState(0); // 0..3
+
+  // Print animation and data
   const [stripData, setStripData] = useState(null); // { dataUrl, blob }
   const [isGeneratingStrip, setIsGeneratingStrip] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | 'saved' | 'downloaded'
 
   // Domestic references
@@ -50,13 +54,11 @@ export default function PhotoBooth() {
       setPermissionError(null);
       setCameraReady(false);
 
-      // Stop previous stream if any
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
 
-      // Constraints prioritizing front camera
       const constraints = {
         audio: false,
         video: {
@@ -88,7 +90,7 @@ export default function PhotoBooth() {
     }
   }, [cameraFacing]);
 
-  // Handle switching camera
+  // Handle switching front/back camera
   const toggleCameraFacing = async () => {
     const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
     setCameraFacing(nextFacing);
@@ -164,7 +166,7 @@ export default function PhotoBooth() {
       await new Promise((r) => setTimeout(r, 180));
       setFlashing(false);
 
-      // Pause briefly between shots so user can pose for next shot
+      // Pause between shots so user can change poses
       if (shot < 3) {
         await new Promise((r) => setTimeout(r, 900));
       }
@@ -173,33 +175,44 @@ export default function PhotoBooth() {
     isCapturingRef.current = false;
     setCountdown(null);
 
-    // Sequence completed! Celebrate with confetti and generate strip
-    confetti({
-      particleCount: 60,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ['#ffffff', '#ff3b30', '#ff9500', '#34c759', '#007aff'],
-    });
-
+    // Sequence completed! Switch to results and trigger printer slide-out
     setAppState('results');
+    setIsPrinting(true);
+    playPrintSound();
+
+    setTimeout(() => {
+      confetti({
+        particleCount: 50,
+        spread: 60,
+        origin: { y: 0.7 },
+        colors: ['#ffffff', '#ff3b30', '#ff9500', '#34c759', '#007aff'],
+      });
+    }, 1100);
+
+    setTimeout(() => {
+      setIsPrinting(false);
+    }, 1900);
   };
 
-  // Re-generate photo strip whenever capturedPhotos, selectedTheme, or selectedFilter changes
+  // Re-generate photo print whenever capturedPhotos, layout, theme, filter, or polaroid options change
   useEffect(() => {
     if (appState === 'results' && capturedPhotos.length > 0) {
       let isMounted = true;
       setIsGeneratingStrip(true);
 
       generatePhotoStrip(capturedPhotos, {
+        layout: selectedLayout,
         theme: selectedTheme,
         filter: selectedFilter,
+        caption: polaroidCaption,
+        polaroidShotIndex: polaroidShotIndex,
       }).then((result) => {
         if (isMounted) {
           setStripData(result);
           setIsGeneratingStrip(false);
         }
       }).catch((err) => {
-        console.error('Failed to generate strip:', err);
+        console.error('Failed to generate print:', err);
         if (isMounted) setIsGeneratingStrip(false);
       });
 
@@ -207,22 +220,41 @@ export default function PhotoBooth() {
         isMounted = false;
       };
     }
-  }, [appState, capturedPhotos, selectedTheme, selectedFilter]);
+  }, [
+    appState,
+    capturedPhotos,
+    selectedLayout,
+    selectedTheme,
+    selectedFilter,
+    polaroidCaption,
+    polaroidShotIndex,
+  ]);
 
   // Retake photos
   const handleRetake = () => {
     setCapturedPhotos([]);
     setStripData(null);
     setSaveStatus(null);
+    setIsPrinting(false);
     setAppState('camera');
     startCamera();
+  };
+
+  // Trigger printer emerge animation manually
+  const triggerPrintEmerge = (newLayout) => {
+    if (newLayout) setSelectedLayout(newLayout);
+    setIsPrinting(true);
+    playPrintSound();
+    setTimeout(() => {
+      setIsPrinting(false);
+    }, 1900);
   };
 
   // Save handler (Web Share API for iPhone Save Image, Download fallback for laptop)
   const handleSave = async () => {
     if (!stripData?.blob) return;
 
-    const fileName = `photobooth-${new Date().toISOString().slice(0, 10)}.png`;
+    const fileName = `photobooth-${selectedLayout}-${new Date().toISOString().slice(0, 10)}.png`;
     const file = new File([stripData.blob], fileName, { type: 'image/png' });
 
     // 1. Try mobile native share sheet with file (iPhone Safari / Android)
@@ -234,14 +266,13 @@ export default function PhotoBooth() {
       try {
         await navigator.share({
           files: [file],
-          title: 'My Photo Booth Strip',
+          title: 'My Photo Booth Print',
           text: 'Captured with Pocket Photo Booth!',
         });
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus(null), 3000);
         return;
       } catch (err) {
-        // User canceled share sheet, or fallback needed
         if (err.name !== 'AbortError') {
           console.warn('Share sheet failed, falling back to download:', err);
         } else {
@@ -265,7 +296,7 @@ export default function PhotoBooth() {
     }
   };
 
-  // Demo mode photos (for testing on laptops without webcam or simulator)
+  // Demo mode photos (for testing without webcam or in simulator)
   const loadDemoPhotos = () => {
     const demoSvgs = [
       'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450"><rect width="100%" height="100%" fill="%23f43f5e"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="white" font-size="48" font-family="sans-serif">📸 Smile 1</text></svg>',
@@ -275,6 +306,7 @@ export default function PhotoBooth() {
     ];
     setCapturedPhotos(demoSvgs);
     setAppState('results');
+    triggerPrintEmerge();
   };
 
   return (
@@ -302,7 +334,7 @@ export default function PhotoBooth() {
           objectFit: 'cover',
           transform: cameraFacing === 'user' ? 'scaleX(-1)' : 'none',
           filter: FILTERS[selectedFilter]?.filter || 'none',
-          opacity: appState === 'results' ? 0.15 : 1,
+          opacity: appState === 'results' ? 0.12 : 1,
           transition: 'opacity 0.4s ease, filter 0.25s ease',
           pointerEvents: 'none',
         }}
@@ -394,7 +426,7 @@ export default function PhotoBooth() {
               <div
                 style={{
                   marginTop: '24px',
-                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                  backgroundColor: 'rgba(0, 0, 0, 0.75)',
                   backdropFilter: 'blur(20px)',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   borderRadius: '9999px',
@@ -431,7 +463,7 @@ export default function PhotoBooth() {
             </div>
           )}
 
-          {/* Bottom Bar: Filter selector & iPhone Shutter Button */}
+          {/* Bottom Bar: Filter Selector & iPhone Shutter Button */}
           <footer
             style={{
               position: 'absolute',
@@ -523,7 +555,7 @@ export default function PhotoBooth() {
         </>
       )}
 
-      {/* 4. Results Screen: Vertical Photo Strip, Save & Retake */}
+      {/* 4. Results Screen: Layout Picker, Printer Slot Animation & Save */}
       {appState === 'results' && (
         <div
           className="results-enter"
@@ -535,33 +567,53 @@ export default function PhotoBooth() {
             backgroundColor: '#09090b',
             zIndex: 50,
             overflowY: 'auto',
-            paddingTop: 'calc(var(--safe-top) + 16px)',
-            paddingBottom: 'calc(var(--safe-bottom) + 24px)',
+            paddingTop: 'calc(var(--safe-top) + 12px)',
+            paddingBottom: 'calc(var(--safe-bottom) + 20px)',
             paddingLeft: 'calc(var(--safe-left) + 16px)',
             paddingRight: 'calc(var(--safe-right) + 16px)',
           }}
         >
-          {/* Results Top Header */}
+          {/* Header: Close / Retake & Layout Picker */}
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              marginBottom: '16px',
+              marginBottom: '10px',
               flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button onClick={handleRetake} className="glass-btn" aria-label="Close to camera">
-                <X size={20} />
+            <button onClick={handleRetake} className="glass-btn" aria-label="Close to camera">
+              <X size={20} />
+            </button>
+
+            {/* Layout Picker: Vertical Strip | 2x2 Grid | Polaroid */}
+            <div className="layout-pill-group">
+              <button
+                className={`layout-pill-btn ${selectedLayout === 'strip' ? 'active' : ''}`}
+                onClick={() => triggerPrintEmerge('strip')}
+              >
+                <Film size={14} />
+                <span>Strip</span>
               </button>
-              <h1 style={{ fontSize: '18px', fontWeight: '700', color: '#ffffff' }}>
-                Your Photo Strip
-              </h1>
+              <button
+                className={`layout-pill-btn ${selectedLayout === 'grid' ? 'active' : ''}`}
+                onClick={() => triggerPrintEmerge('grid')}
+              >
+                <LayoutGrid size={14} />
+                <span>2×2 Grid</span>
+              </button>
+              <button
+                className={`layout-pill-btn ${selectedLayout === 'polaroid' ? 'active' : ''}`}
+                onClick={() => triggerPrintEmerge('polaroid')}
+              >
+                <Square size={14} />
+                <span>Polaroid</span>
+              </button>
             </div>
 
-            {/* Quick theme switcher pills */}
-            <div style={{ display: 'flex', gap: '6px' }}>
+            {/* Quick theme colors */}
+            <div style={{ display: 'flex', gap: '5px' }}>
               {Object.keys(FRAME_THEMES).map((key) => {
                 const t = FRAME_THEMES[key];
                 return (
@@ -569,8 +621,8 @@ export default function PhotoBooth() {
                     key={key}
                     onClick={() => setSelectedTheme(key)}
                     style={{
-                      width: '26px',
-                      height: '26px',
+                      width: '24px',
+                      height: '24px',
                       borderRadius: '50%',
                       backgroundColor: t.bg,
                       border: selectedTheme === key ? '2px solid #007aff' : '1px solid rgba(255,255,255,0.3)',
@@ -586,47 +638,140 @@ export default function PhotoBooth() {
             </div>
           </div>
 
-          {/* Photo Strip Display Container */}
+          {/* Polaroid-specific controls: Handwritten Caption & Shot Picker */}
+          {selectedLayout === 'polaroid' && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                alignItems: 'center',
+                margin: '4px 0 10px 0',
+                flexShrink: 0,
+              }}
+            >
+              {/* Handwritten caption edit field */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  backgroundColor: 'rgba(28, 28, 30, 0.85)',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  borderRadius: '12px',
+                  padding: '5px 12px',
+                  width: '100%',
+                  maxWidth: '320px',
+                }}
+              >
+                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.6)', flexShrink: 0 }}>
+                  Caption:
+                </span>
+                <input
+                  type="text"
+                  value={polaroidCaption}
+                  onChange={(e) => setPolaroidCaption(e.target.value)}
+                  maxLength={30}
+                  placeholder="Write a cute caption..."
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#ffffff',
+                    fontSize: '18px',
+                    fontFamily: 'var(--handwritten-font)',
+                    outline: 'none',
+                    flex: 1,
+                    width: '100%',
+                  }}
+                />
+              </div>
+
+              {/* Pick which shot to display */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>Shot:</span>
+                {[0, 1, 2, 3].map((idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setPolaroidShotIndex(idx)}
+                    style={{
+                      width: '26px',
+                      height: '26px',
+                      borderRadius: '50%',
+                      border: polaroidShotIndex === idx ? '2px solid #007aff' : '1px solid rgba(255,255,255,0.2)',
+                      background: polaroidShotIndex === idx ? '#ffffff' : 'rgba(255,255,255,0.1)',
+                      color: polaroidShotIndex === idx ? '#000000' : '#ffffff',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Photo Dispenser: Realistic Slot with Sliding Paper Animation */}
           <div
             style={{
               flex: '1 1 auto',
               display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
-              padding: '8px 0',
-              minHeight: '380px',
+              justifyContent: 'flex-start',
+              padding: '4px 0',
+              minHeight: '360px',
+              position: 'relative',
+              overflow: 'hidden',
             }}
           >
-            {stripData ? (
-              <div
-                style={{
-                  position: 'relative',
-                  maxHeight: '62vh',
-                  boxShadow: '0 20px 48px -10px rgba(0,0,0,0.9), 0 0 1px 1px rgba(255,255,255,0.15)',
-                  borderRadius: '6px',
-                  overflow: 'hidden',
-                  display: 'flex',
-                }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={stripData.dataUrl}
-                  alt="Your 4-shot photobooth strip"
+            {/* The photo booth printer slot at the top */}
+            <div className="printer-slot-mouth" title="Photo Booth Printer Slot" />
+
+            {/* Paper sliding out of the dispenser slot */}
+            <div
+              style={{
+                width: '100%',
+                overflow: 'hidden',
+                display: 'flex',
+                justifyContent: 'center',
+                paddingTop: '2px',
+              }}
+            >
+              {stripData ? (
+                <div
+                  key={`${selectedLayout}-${polaroidShotIndex}-${isPrinting ? 'print' : 'static'}`}
+                  className={isPrinting ? 'paper-emerge' : ''}
                   style={{
-                    display: 'block',
-                    maxHeight: '62vh',
-                    width: 'auto',
-                    objectFit: 'contain',
-                    borderRadius: '4px',
+                    position: 'relative',
+                    maxHeight: selectedLayout === 'strip' ? '56vh' : '50vh',
+                    boxShadow: '0 20px 48px -10px rgba(0,0,0,0.9), 0 0 1px 1px rgba(255,255,255,0.15)',
+                    borderRadius: '6px',
+                    overflow: 'hidden',
+                    display: 'flex',
                   }}
-                />
-              </div>
-            ) : (
-              <div style={{ color: 'rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <RefreshCw size={18} className="animate-spin" />
-                <span>Developing photo strip...</span>
-              </div>
-            )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={stripData.dataUrl}
+                    alt="Photo booth print"
+                    style={{
+                      display: 'block',
+                      maxHeight: selectedLayout === 'strip' ? '56vh' : '50vh',
+                      width: 'auto',
+                      objectFit: 'contain',
+                      borderRadius: '4px',
+                    }}
+                  />
+                </div>
+              ) : (
+                <div style={{ color: 'rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '40px' }}>
+                  <RefreshCw size={18} className="animate-spin" />
+                  <span>Printing your photos...</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Filter options selector on results screen: Original, Black & White, Film */}
@@ -634,8 +779,8 @@ export default function PhotoBooth() {
             style={{
               display: 'flex',
               justifyContent: 'center',
-              gap: '8px',
-              margin: '12px 0 16px 0',
+              gap: '6px',
+              margin: '8px 0 12px 0',
               flexShrink: 0,
             }}
           >
@@ -647,9 +792,9 @@ export default function PhotoBooth() {
                   key={fKey}
                   onClick={() => setSelectedFilter(fKey)}
                   style={{
-                    padding: '8px 18px',
+                    padding: '6px 16px',
                     borderRadius: '9999px',
-                    fontSize: '13px',
+                    fontSize: '12px',
                     fontWeight: isSelected ? '600' : '400',
                     color: isSelected ? '#000000' : '#ffffff',
                     backgroundColor: isSelected ? '#ffffff' : 'rgba(255, 255, 255, 0.1)',
@@ -669,22 +814,20 @@ export default function PhotoBooth() {
             style={{
               display: 'flex',
               flexDirection: 'column',
-              gap: '10px',
+              gap: '8px',
               flexShrink: 0,
             }}
           >
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-              {/* Retake Button */}
               <button
                 onClick={handleRetake}
                 className="ios-btn-secondary"
-                style={{ flex: 1, maxWidth: '160px' }}
+                style={{ flex: 1, maxWidth: '150px' }}
               >
                 <RotateCcw size={18} />
                 <span>Retake</span>
               </button>
 
-              {/* Save Button (Shares to Photos on iPhone, Downloads on Laptop) */}
               <button
                 onClick={handleSave}
                 disabled={!stripData || isGeneratingStrip}
@@ -699,7 +842,7 @@ export default function PhotoBooth() {
                 ) : (
                   <>
                     <Share2 size={20} />
-                    <span>Save Strip</span>
+                    <span>Save {LAYOUTS[selectedLayout]?.name || 'Print'}</span>
                   </>
                 )}
               </button>
@@ -709,8 +852,8 @@ export default function PhotoBooth() {
               style={{
                 textAlign: 'center',
                 color: 'rgba(255, 255, 255, 0.5)',
-                fontSize: '12px',
-                marginTop: '4px',
+                fontSize: '11px',
+                marginTop: '2px',
               }}
             >
               On iPhone, tap &ldquo;Save Image&rdquo; in the share sheet to add to Photos.
@@ -769,7 +912,6 @@ export default function PhotoBooth() {
             Photo Booth needs front camera permission to take your photos. No photos leave your phone.
           </p>
 
-          {/* Native iOS settings guide */}
           <div
             style={{
               backgroundColor: 'rgba(28, 28, 30, 0.8)',

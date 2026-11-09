@@ -1,9 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap');
+
 :root {
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
   --system-font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+  --handwritten-font: 'Caveat', 'Nanum Pen Script', 'Bradley Hand', 'Chalkboard', cursive;
   --bg-color: #000000;
   --text-color: #ffffff;
 }
@@ -88,6 +91,31 @@ html, body {
   }
 }
 
+/* Photo Booth Printer Slot & Emerge Animation */
+@keyframes printDispense {
+  0% {
+    transform: translateY(-90%);
+    opacity: 0.2;
+    filter: brightness(0.9);
+  }
+  25% {
+    transform: translateY(-68%);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateY(-44%);
+  }
+  75% {
+    transform: translateY(-18%);
+    filter: brightness(0.98);
+  }
+  100% {
+    transform: translateY(0%);
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
 .countdown-number {
   animation: countdownPulse 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
@@ -97,7 +125,25 @@ html, body {
 }
 
 .results-enter {
-  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.printer-slot-mouth {
+  width: 90%;
+  max-width: 380px;
+  height: 10px;
+  background: #09090b;
+  border-radius: 9999px;
+  box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.95), 0 1px 0 rgba(255, 255, 255, 0.12);
+  margin: 0 auto 4px auto;
+  position: relative;
+  z-index: 10;
+  border: 1px solid #1f1f23;
+}
+
+.paper-emerge {
+  animation: printDispense 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  transform-origin: top center;
 }
 
 /* Shutter Button */
@@ -230,6 +276,41 @@ html, body {
 .ios-btn-secondary:active {
   transform: scale(0.96);
   background: rgba(255, 255, 255, 0.24);
+}
+
+/* Layout Pill Selector */
+.layout-pill-group {
+  display: flex;
+  align-items: center;
+  background: rgba(28, 28, 30, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.layout-pill-btn {
+  padding: 6px 14px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.75);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.layout-pill-btn.active {
+  background: #ffffff;
+  color: #000000;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 /* Scrollbar hide for smooth iOS lists */
