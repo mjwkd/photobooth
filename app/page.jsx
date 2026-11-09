@@ -12,11 +12,15 @@ import {
   Film,
   LayoutGrid,
   Square,
-  AlertCircle
+  AlertCircle,
+  Palette,
+  Image as ImageIcon
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { playCountdownBeep, playShutterSound, playPrintSound, stopAllAudio } from '../lib/audio';
 import { generatePhotoStrip, FRAME_THEMES, FILTERS, LAYOUTS } from '../lib/stripGenerator';
+import { BACKDROPS } from '../lib/backdrops';
+import { getSegmenter, compositeBackdropFrame } from '../lib/backgroundSegmenter';
 
 export default function PhotoBooth() {
   // App states: 'camera' | 'capturing' | 'results' | 'denied'
@@ -31,10 +35,12 @@ export default function PhotoBooth() {
   const [flashing, setFlashing] = useState(false);
   const [capturedPhotos, setCapturedPhotos] = useState([]);
 
-  // Results screen customizations
-  const [selectedLayout, setSelectedLayout] = useState('strip'); // 'strip' | 'grid' | 'polaroid'
-  const [selectedTheme, setSelectedTheme] = useState('white');
+  // Effects & Customization state
+  const [activeEffectTab, setActiveEffectTab] = useState('backdrops'); // 'backdrops' | 'filters'
+  const [selectedBackdrop, setSelectedBackdrop] = useState('fish'); // Default to 'fish' (like user's request!)
   const [selectedFilter, setSelectedFilter] = useState('original'); // 'original' | 'bw' | 'film'
+  const [selectedTheme, setSelectedTheme] = useState('white');
+  const [selectedLayout, setSelectedLayout] = useState('strip'); // 'strip' | 'grid' | 'polaroid'
   const [polaroidCaption, setPolaroidCaption] = useState('best memories ♥');
   const [polaroidShotIndex, setPolaroidShotIndex] = useState(0); // 0..3
 
@@ -44,9 +50,11 @@ export default function PhotoBooth() {
   const [isPrinting, setIsPrinting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | 'saved' | 'downloaded' | 'error'
+  const [isBackdropLoading, setIsBackdropLoading] = useState(false);
 
   // References
   const videoRef = useRef(null);
+  const backdropCanvasRef = useRef(null);
   const streamRef = useRef(null);
   const isCapturingRef = useRef(false);
   const cancelCaptureRef = useRef(false);
@@ -101,9 +109,16 @@ export default function PhotoBooth() {
     await startCamera(nextFacing);
   };
 
-  // Start camera on mount
+  // Start camera on mount & pre-warm AI segmenter
   useEffect(() => {
     startCamera();
+    setIsBackdropLoading(true);
+    getSegmenter().then(() => {
+      setIsBackdropLoading(false);
+    }).catch(() => {
+      setIsBackdropLoading(false);
+    });
+
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -111,7 +126,52 @@ export default function PhotoBooth() {
     };
   }, [startCamera]);
 
-  // Edge Case 3 Fix: Handle leaving the app mid-countdown (tab switch, minimize, lock)
+  // Live Backdrop Compositing Loop (runs at 60 FPS via requestAnimationFrame)
+  useEffect(() => {
+    let animId;
+    let isActive = true;
+
+    if (selectedBackdrop !== 'none') {
+      const renderLoop = () => {
+        if (!isActive) return;
+
+        if (
+          videoRef.current &&
+          backdropCanvasRef.current &&
+          videoRef.current.readyState >= 2
+        ) {
+          const video = videoRef.current;
+          const canvas = backdropCanvasRef.current;
+          const targetW = video.videoWidth || 1280;
+          const targetH = video.videoHeight || 960;
+
+          if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
+          }
+
+          compositeBackdropFrame({
+            video,
+            targetCanvas: canvas,
+            backdropId: selectedBackdrop,
+            time: performance.now() / 1000,
+            facing: cameraFacing,
+          });
+        }
+
+        animId = requestAnimationFrame(renderLoop);
+      };
+
+      animId = requestAnimationFrame(renderLoop);
+    }
+
+    return () => {
+      isActive = false;
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [selectedBackdrop, cameraFacing]);
+
+  // Handle leaving the app mid-countdown
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
@@ -135,8 +195,12 @@ export default function PhotoBooth() {
     };
   }, []);
 
-  // Edge Case 4 Fix: High-resolution frame capture without quality downsampling
+  // High-resolution frame capture (using backdrop composite canvas if active, or video feed)
   const captureFrame = useCallback(() => {
+    if (selectedBackdrop !== 'none' && backdropCanvasRef.current) {
+      return backdropCanvasRef.current.toDataURL('image/png');
+    }
+
     const video = videoRef.current;
     if (!video) return null;
 
@@ -152,18 +216,16 @@ export default function PhotoBooth() {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Mirror front camera horizontally
     if (cameraFacing === 'user') {
       ctx.translate(width, 0);
       ctx.scale(-1, 1);
     }
 
     ctx.drawImage(video, 0, 0, width, height);
-    // Use lossless PNG or max quality JPEG for the intermediate shot buffer
     return canvas.toDataURL('image/png');
-  }, [cameraFacing]);
+  }, [cameraFacing, selectedBackdrop]);
 
-  // Start the 4-shot sequence with cancel-protection
+  // Start 4-shot sequence
   const startBoothSequence = async () => {
     if (!cameraReady || isCapturingRef.current) return;
 
@@ -182,7 +244,6 @@ export default function PhotoBooth() {
 
       setCurrentShotIndex(shot);
 
-      // Countdown: 3, 2, 1
       for (let count = 3; count >= 1; count--) {
         if (cancelCaptureRef.current) {
           isCapturingRef.current = false;
@@ -214,11 +275,9 @@ export default function PhotoBooth() {
         setCapturedPhotos([...photos]);
       }
 
-      // Hide flash after 180ms
       await new Promise((r) => setTimeout(r, 180));
       setFlashing(false);
 
-      // Pause between shots so user can change poses
       if (shot < 3) {
         await new Promise((r) => setTimeout(r, 900));
       }
@@ -252,7 +311,7 @@ export default function PhotoBooth() {
     }, 1900);
   };
 
-  // Re-generate photo print whenever capturedPhotos, layout, theme, filter, or polaroid options change
+  // Re-generate photo print
   useEffect(() => {
     if (appState === 'results' && capturedPhotos.length > 0) {
       let isMounted = true;
@@ -311,7 +370,7 @@ export default function PhotoBooth() {
     }, 1900);
   };
 
-  // Edge Case 5 Fix: Guard against saving twice & handle permission rejection
+  // Save handler with double-tap lock and error handling
   const handleSave = async () => {
     if (isSavingRef.current || isSaving || !stripData?.blob) return;
 
@@ -323,7 +382,6 @@ export default function PhotoBooth() {
     const file = new File([stripData.blob], fileName, { type: 'image/png' });
 
     try {
-      // 1. Mobile native share sheet with file (iPhone Safari / Android)
       if (
         typeof navigator !== 'undefined' &&
         navigator.canShare &&
@@ -339,19 +397,14 @@ export default function PhotoBooth() {
           setTimeout(() => setSaveStatus(null), 3000);
           return;
         } catch (err) {
-          // User dismissed or canceled share sheet cleanly
-          if (err.name === 'AbortError') {
-            return;
-          }
-          // Another share in progress: ignore double trigger
-          if (err.name === 'InvalidStateError') {
+          if (err.name === 'AbortError' || err.name === 'InvalidStateError') {
             return;
           }
           console.warn('Share sheet failed:', err);
         }
       }
 
-      // 2. Direct image download for desktop / laptop
+      // Direct image download fallback
       const a = document.createElement('a');
       a.href = stripData.dataUrl;
       a.download = fileName;
@@ -393,7 +446,7 @@ export default function PhotoBooth() {
         overflow: 'hidden',
       }}
     >
-      {/* 1. Fullscreen Live Video Stream with Real-time Filter */}
+      {/* 1. Fullscreen Live Video Stream (Always mounted) */}
       <video
         ref={videoRef}
         playsInline
@@ -408,13 +461,68 @@ export default function PhotoBooth() {
           objectFit: 'cover',
           transform: cameraFacing === 'user' ? 'scaleX(-1)' : 'none',
           filter: FILTERS[selectedFilter]?.filter || 'none',
-          opacity: appState === 'results' ? 0.12 : 1,
-          transition: 'opacity 0.4s ease, filter 0.25s ease',
+          opacity: selectedBackdrop === 'none' && appState !== 'results' ? 1 : 0.08,
+          transition: 'opacity 0.3s ease, filter 0.25s ease',
           pointerEvents: 'none',
+          zIndex: 5,
         }}
       />
 
-      {/* 2. White Xenon Flash Effect */}
+      {/* 2. Virtual Backdrop Live Compositing Canvas (Active when backdrop !== 'none') */}
+      <canvas
+        ref={backdropCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          objectFit: 'cover',
+          filter: FILTERS[selectedFilter]?.filter || 'none',
+          opacity: selectedBackdrop !== 'none' && appState !== 'results' ? 1 : 0,
+          transition: 'opacity 0.3s ease, filter 0.25s ease',
+          pointerEvents: 'none',
+          zIndex: 10,
+        }}
+      />
+
+      {/* 3. Photo Booth Active Backdrop Label (e.g., "Fish" just like user's screenshot) */}
+      {selectedBackdrop !== 'none' && appState === 'camera' && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(var(--safe-bottom) + 158px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            borderRadius: '9999px',
+            padding: '4px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            zIndex: 25,
+            color: '#ffffff',
+            fontSize: '13px',
+            fontWeight: '600',
+            letterSpacing: '0.5px',
+            pointerEvents: 'none',
+            textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+          }}
+        >
+          <span>{BACKDROPS[selectedBackdrop]?.icon}</span>
+          <span>{BACKDROPS[selectedBackdrop]?.name}</span>
+          {isBackdropLoading && (
+            <span style={{ fontSize: '11px', color: '#ffd60a', marginLeft: '4px' }}>
+              (AI loading...)
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* 4. White Xenon Flash Effect */}
       {flashing && (
         <div
           className="flash-overlay"
@@ -428,10 +536,9 @@ export default function PhotoBooth() {
         />
       )}
 
-      {/* 3. Camera View & Top Navigation Bar */}
+      {/* 5. Camera View & Top Navigation Bar */}
       {appState !== 'results' && appState !== 'denied' && (
         <>
-          {/* Top Bar respecting iOS Safe Area */}
           <header
             className="camera-header"
             style={{
@@ -451,7 +558,7 @@ export default function PhotoBooth() {
           >
             <div className="glass-pill">
               <Sparkles size={16} color="#ffd60a" />
-              <span>4-Shot Photo Booth</span>
+              <span>Photo Booth</span>
             </div>
 
             {/* Camera Switch Button */}
@@ -480,7 +587,6 @@ export default function PhotoBooth() {
                 pointerEvents: 'none',
               }}
             >
-              {/* Active countdown number */}
               {countdown !== null && (
                 <div
                   key={countdown}
@@ -538,7 +644,7 @@ export default function PhotoBooth() {
             </div>
           )}
 
-          {/* Bottom Bar: Filter Selector & iPhone Shutter Button */}
+          {/* Bottom Bar: Effects Selector (Backdrops / Filters) & Shutter */}
           <footer
             className="camera-footer"
             style={{
@@ -546,84 +652,191 @@ export default function PhotoBooth() {
               bottom: 0,
               left: 0,
               right: 0,
-              paddingBottom: 'calc(var(--safe-bottom) + 24px)',
-              paddingLeft: 'calc(var(--safe-left) + 20px)',
-              paddingRight: 'calc(var(--safe-right) + 20px)',
+              paddingBottom: 'calc(var(--safe-bottom) + 20px)',
+              paddingLeft: 'calc(var(--safe-left) + 16px)',
+              paddingRight: 'calc(var(--safe-right) + 16px)',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
               zIndex: 30,
-              gap: '14px',
+              gap: '10px',
             }}
           >
-            {/* Filter buttons row above the shutter: Original, Black & White, Film */}
+            {/* Effect Mode Tabs: [ 🖼️ Backdrops ]  [ 🎨 Filters ] */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
-                backgroundColor: 'rgba(24, 24, 27, 0.72)',
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                padding: '4px',
+                backgroundColor: 'rgba(18, 18, 20, 0.75)',
+                backdropFilter: 'blur(25px)',
+                WebkitBackdropFilter: 'blur(25px)',
+                padding: '3px',
                 borderRadius: '9999px',
-                border: '1px solid rgba(255, 255, 255, 0.18)',
-                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                gap: '4px',
+                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
                 pointerEvents: appState === 'capturing' ? 'none' : 'auto',
-                opacity: appState === 'capturing' ? 0.4 : 1,
-                transition: 'opacity 0.2s ease',
+                opacity: appState === 'capturing' ? 0.3 : 1,
               }}
             >
-              {Object.keys(FILTERS).map((key) => {
-                const f = FILTERS[key];
-                const isSelected = selectedFilter === key;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => {
-                      setSelectedFilter(key);
-                      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                        navigator.vibrate(20);
-                      }
-                    }}
-                    style={{
-                      padding: '8px 18px',
-                      borderRadius: '9999px',
-                      fontSize: '13px',
-                      fontWeight: isSelected ? '600' : '500',
-                      color: isSelected ? '#000000' : '#ffffff',
-                      backgroundColor: isSelected ? '#ffffff' : 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-                      letterSpacing: '-0.2px',
-                      boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                    }}
-                  >
-                    {f.name}
-                  </button>
-                );
-              })}
+              <button
+                onClick={() => setActiveEffectTab('backdrops')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '5px 14px',
+                  borderRadius: '9999px',
+                  border: 'none',
+                  background: activeEffectTab === 'backdrops' ? '#ffffff' : 'transparent',
+                  color: activeEffectTab === 'backdrops' ? '#000000' : 'rgba(255,255,255,0.7)',
+                  fontSize: '12px',
+                  fontWeight: activeEffectTab === 'backdrops' ? '600' : '500',
+                  cursor: 'pointer',
+                  transition: 'all 0.18s ease',
+                }}
+              >
+                <ImageIcon size={13} />
+                <span>Backdrops</span>
+              </button>
+
+              <button
+                onClick={() => setActiveEffectTab('filters')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '5px 14px',
+                  borderRadius: '9999px',
+                  border: 'none',
+                  background: activeEffectTab === 'filters' ? '#ffffff' : 'transparent',
+                  color: activeEffectTab === 'filters' ? '#000000' : 'rgba(255,255,255,0.7)',
+                  fontSize: '12px',
+                  fontWeight: activeEffectTab === 'filters' ? '600' : '500',
+                  cursor: 'pointer',
+                  transition: 'all 0.18s ease',
+                }}
+              >
+                <Palette size={13} />
+                <span>Filters</span>
+              </button>
             </div>
 
-            <p
-              style={{
-                color: 'rgba(255, 255, 255, 0.75)',
-                fontSize: '13px',
-                fontWeight: '500',
-                textShadow: '0 1px 4px rgba(0,0,0,0.6)',
-                letterSpacing: '-0.1px',
-              }}
-            >
-              {appState === 'capturing' ? 'Hold steady...' : 'Tap shutter to take 4 photos'}
-            </p>
+            {/* Option Pills Row based on Active Tab */}
+            {activeEffectTab === 'backdrops' ? (
+              /* Virtual Backdrops Row: None | 🐠 Fish | 🪐 Space | 🌅 Sunset | 🌆 Cyber | ☁️ Clouds */
+              <div
+                className="no-scrollbar"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  backgroundColor: 'rgba(24, 24, 27, 0.8)',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  padding: '4px 6px',
+                  borderRadius: '9999px',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                  maxWidth: '92vw',
+                  overflowX: 'auto',
+                  pointerEvents: appState === 'capturing' ? 'none' : 'auto',
+                  opacity: appState === 'capturing' ? 0.3 : 1,
+                }}
+              >
+                {Object.keys(BACKDROPS).map((key) => {
+                  const b = BACKDROPS[key];
+                  const isSelected = selectedBackdrop === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        setSelectedBackdrop(key);
+                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                          navigator.vibrate(18);
+                        }
+                      }}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '9999px',
+                        fontSize: '12px',
+                        fontWeight: isSelected ? '600' : '500',
+                        color: isSelected ? '#000000' : '#ffffff',
+                        backgroundColor: isSelected ? '#ffffff' : 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                        boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      }}
+                    >
+                      <span>{b.icon}</span>
+                      <span>{b.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Filters Row: Original | Black & White | Film */
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  backgroundColor: 'rgba(24, 24, 27, 0.8)',
+                  backdropFilter: 'blur(20px)',
+                  WebkitBackdropFilter: 'blur(20px)',
+                  padding: '4px',
+                  borderRadius: '9999px',
+                  border: '1px solid rgba(255, 255, 255, 0.18)',
+                  boxShadow: '0 4px 18px rgba(0, 0, 0, 0.4)',
+                  pointerEvents: appState === 'capturing' ? 'none' : 'auto',
+                  opacity: appState === 'capturing' ? 0.3 : 1,
+                }}
+              >
+                {Object.keys(FILTERS).map((key) => {
+                  const f = FILTERS[key];
+                  const isSelected = selectedFilter === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        setSelectedFilter(key);
+                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                          navigator.vibrate(18);
+                        }
+                      }}
+                      style={{
+                        padding: '7px 16px',
+                        borderRadius: '9999px',
+                        fontSize: '12px',
+                        fontWeight: isSelected ? '600' : '500',
+                        color: isSelected ? '#000000' : '#ffffff',
+                        backgroundColor: isSelected ? '#ffffff' : 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                        letterSpacing: '-0.2px',
+                        boxShadow: isSelected ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                      }}
+                    >
+                      {f.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <button
               onClick={startBoothSequence}
               disabled={appState === 'capturing' || !cameraReady}
               className={`shutter-btn ${appState === 'capturing' ? 'capturing' : ''}`}
               aria-label="Take 4 photos"
+              style={{ marginTop: '2px' }}
             >
               <div className="shutter-inner" />
             </button>
@@ -631,7 +844,7 @@ export default function PhotoBooth() {
         </>
       )}
 
-      {/* 4. Results Screen: Layout Picker, Printer Slot Animation & Sticky Save Bar */}
+      {/* 6. Results Screen: Layout Picker, Printer Slot Animation & Sticky Save Bar */}
       {appState === 'results' && (
         <div
           className="results-enter"
@@ -725,7 +938,6 @@ export default function PhotoBooth() {
                 flexShrink: 0,
               }}
             >
-              {/* Handwritten caption edit field */}
               <div
                 style={{
                   display: 'flex',
@@ -761,7 +973,6 @@ export default function PhotoBooth() {
                 />
               </div>
 
-              {/* Pick which shot to display */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.6)' }}>Shot:</span>
                 {[0, 1, 2, 3].map((idx) => (
@@ -801,10 +1012,8 @@ export default function PhotoBooth() {
               overflow: 'hidden',
             }}
           >
-            {/* The photo booth printer slot at the top */}
             <div className="printer-slot-mouth" title="Photo Booth Printer Slot" />
 
-            {/* Paper sliding out of the dispenser slot */}
             <div
               style={{
                 width: '100%',
@@ -884,7 +1093,7 @@ export default function PhotoBooth() {
             })}
           </div>
 
-          {/* Edge Case 6 Fix: Sticky Bottom Bar (never hidden behind the home bar) */}
+          {/* Sticky Bottom Bar (Safe from Home Bar) */}
           <div className="results-bottom-bar">
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button
@@ -944,7 +1153,7 @@ export default function PhotoBooth() {
         </div>
       )}
 
-      {/* 5. Camera Permission Denied / Error Screen (Edge Case 1 Fix: Auto reload & clear guide) */}
+      {/* 7. Camera Permission Denied Screen */}
       {appState === 'denied' && (
         <div
           style={{
