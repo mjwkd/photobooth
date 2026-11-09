@@ -1,6 +1,9 @@
-node_modules
-dist
+node_modules/
+.next/
+dist/
 .DS_Store
 output/
 playwright-report/
 test-results/
+.env*.local
+_legacy_vite/

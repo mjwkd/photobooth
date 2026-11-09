@@ -1,133 +1,25 @@
-# Prototyping for Masters
+# Photo Booth 📸
 
-A Vite course homepage with a weekly student-project gallery and a student-site directory. Headings use Faculty Glyphic and body copy uses IBM Plex Mono.
+A native-feeling iPhone web app and PWA for taking 4-shot vertical photobooth strips.
 
-## Browse student work
+## Features
 
-The homepage opens in **Student sites**, showing the full roster. Choose **Projects**, then select **Week 3 — Typography**, **Week 4 — PixiJS**, **Week 4 — Doodle**, **Week 5 — Weather apps**, **Week 5 — API explorations**, **Week 6 — Books**, or **Week 7 — Inspiration library**. Every view is sorted alphabetically by student name, then by most recent week first, then project title. Filters are shareable and work with browser Back/Forward:
+- **Front-Camera First**: Fullscreen live camera preview optimized for phones with front-facing camera mirror preview.
+- **4-Shot Sequence**: Tap the shutter button for a 3-2-1 countdown, xenon flash, and automatic 4-shot burst capture with audio sound effects (Web Audio API).
+- **Vertical Photo Strip**: Stacks the 4 photos into a classic vertical film strip with a white border, customizable frame themes (Classic White, Midnight Black, Vintage Cream, Pastel Pink), photo filters (Normal, B&W Film, Warm 90s, Cool Y2K), and timestamp.
+- **iOS Share Sheet & Save to Photos**: On iPhone, tapping "Save Strip" opens the native share sheet so you can tap "Save Image" to place it straight into Apple Photos. On laptops/desktops, it downloads the PNG file directly.
+- **Installable PWA**: Includes web app manifest (`display: standalone`), touch icons, and iOS meta tags for full-screen standalone mode without the Safari URL bar.
+- **iPhone Safe Areas**: Full support for `viewport-fit=cover` and `env(safe-area-inset-*)` ensuring UI never collides with the notch, Dynamic Island, or home indicator.
+- **Permission Recovery**: Friendly iOS-style troubleshooting guide if camera access is denied.
 
-- `/?week=3#student-sites` — Week 3 typography gallery
-- `/?week=4&type=pixijs#student-sites` — Week 4 PixiJS gallery
-- `/?week=4&type=doodle#student-sites` — Week 4 Doodle gallery
-- `/?week=5&type=weather#student-sites` — Week 5 weather apps gallery
-- `/?week=5&type=api#student-sites` — Week 5 API explorations gallery
-- `/?week=6&type=books#student-sites` — Week 6 bookshelf projects
-- `/?week=7&type=inspiration#student-sites` — Week 7 inspiration libraries
-- Older week-only links open the first collection for that week (PixiJS for Week 4).
-- `/#student-sites` — student directory (default)
-- `/?view=projects#student-sites` — all projects
+## Getting Started
 
-The collection contains **36 Typography**, **22 projects in the PixiJS group**, **28 Doodle**, **32 Weather apps**, **9 API explorations**, **31 Books**, and **24 Inspiration library** projects. Classification is based on the rendered project and its main interaction; portfolio titles and route names can be stale. PixiJS projects are checked for actual renderer usage, not just a library name in a prefetched homepage, with instructor-directed additions noted in [the curation review](docs/project-curation.md).
+Run the development server:
 
-The [Week 5 review](docs/weather-review-2026-10-09.md) records the initial 29 published sites and Caoyun’s subsequent site review, the 25 weather apps included, and API/demo limitations.
-
-The [October 15 review](docs/site-review-2026-10-15.md) records seven additional gallery entries found across 30 published student sites.
-
-The [October 16 recheck](docs/week5-review-2026-10-16.md) adds Zoe’s Atmos, Aria’s Weather Flag, and Ethan’s Herbal Atlas. A [later screenshot refresh](docs/preview-refresh-2026-10-16.md) verified Aria’s live weather poster and Minju’s restored weather route, and refreshed all 28 weather previews.
-
-The [API explorations review](docs/api-review-2026-10-09.md) records the full-roster review, four non-weather API projects, and their live/demo behavior.
-
-The [Week 6 Books review](docs/books-review-2026-10-16.md) records the full-roster review, 29 published bookshelf projects (with an October 23 recheck), and observed demo/configuration limitations.
-
-The [Week 7 Inspiration library review](docs/inspiration-review-2026-10-23.md) covers all 24 published libraries; all are listed for visibility, and the note records which have a connected database.
-
-The [October 24 thumbnail refresh](docs/preview-refresh-2026-10-24.md) recaptured all 31 homepages and updated the 11 whose design or content changed, including Matthew’s redesigned site.
-
-The [October 23 recheck](docs/site-review-2026-10-23.md) reran the audit across all 31 sites, added seven projects (six to earlier weeks, one to Week 7), and refreshed every thumbnail.
-
-The [October 17 audit](docs/site-review-2026-10-17.md) rechecked all 31 sites with `npm run audit:projects`, added five projects, removed two that no longer exist, and refreshed every thumbnail.
-
-Students without a verified project in a collection remain in the directory. Week numbers follow the course assignments, not the numbering on individual portfolios.
-
-## Add student sites
-
-Edit `src/students.js`:
-
-```js
-{ name: "Student Name", url: "https://student-site.com" }
-```
-
-Rows without a URL display “Site forthcoming.”
-
-## Add a week or project
-
-Add a reviewed project to the appropriate list in `src/projects.js`:
-
-```js
-["Student Name", "Project title", "/prototypes/project-name"]
-```
-
-Use `typographyProjects` for Week 3 typography, `pixiProjects` for Week 4 PixiJS, `doodleProjects` for Week 4 Doodle work, `weatherProjects` for Week 5 weather apps, `apiProjects` for Week 5 API explorations, `bookProjects` for Week 6 Books, or `inspirationProjects` for Week 7 Inspiration library. Names must match `src/students.js`. URLs can be relative to the student's site or absolute. Each list assigns its week, project type, and preview filename explicitly. Adding a future collection also requires entries in `weeks`, `projectTypes`, and `makeProjects`.
-
-Inspect the actual page before classifying it. Games that happen to contain letters do not belong in Typography; hand-drawn styling alone does not make a game a Doodle tool. The filter options and counts update from the curated data.
-
-## Add a playground widget
-
-The playground at `/playground/` is an open canvas of widgets, one or more from each student. Drag empty space to pan, and scroll to zoom.
-
-To add yours, create one file in `src/playground/widgets/` named after you, such as `jane-doe.js`. Every file in that folder appears on the canvas automatically, so you don’t need to edit any other file. `elizabeth-lin.js` is a working example.
-
-```js
-export default {
-  student: "Jane Doe",
-  title: "Widget title",
-  width: 320,
-  height: 220,
-  mount(root) {
-    root.innerHTML = `<p>Hello</p>`;
-  },
-};
-```
-
-`mount` receives the inside of your widget. Put any HTML, CSS, SVG, canvas, or JavaScript there; styles you add stay inside your widget. Color and font follow the page palette unless you set your own. Width and height are in pixels and default to 320 by 220.
-
-Widgets don’t have to look alike. By default a widget sits in a simple frame with your name across the top. Set `frame: false` to drop the frame and draw your own shape, colors, and background; your name then appears underneath. Set `rotate` to tilt it, in degrees. `elizabeth-lin.js` uses both for a tilted clock face that spins when clicked.
-
-Leave out `x` and `y` and the playground finds an open spot. Add them to place your widget at an exact position on the canvas. If your widget throws an error, its frame shows “This widget failed to load” and the rest of the canvas still renders.
-
-Run `npm run dev`, open `/playground/` to check it, then open a pull request with your file.
-
-## Audit student sites
-
-Run the audit regularly to find projects that are missing from the gallery or have stopped working:
-
-```sh
-npm run audit:projects
-npm run audit:projects -- "Student Name"   # check specific students
-```
-
-It opens every student homepage, collects project links (including routes in each site’s scripts), probes common assignment paths, and opens every curated and discovered page. The report lists:
-
-- **New:** reachable pages that aren’t in `src/projects.js`.
-- **Broken:** gallery entries that return errors, not-found pages, or redirect home.
-- **Moved:** gallery entries that redirect elsewhere or now live on the student’s current site.
-- **Homepage unreachable**, plus curated projects no longer linked from the homepage, for reference.
-
-The readable report is saved to ignored `output/project-audit/report.md`, with full detail in `report.json`. The command exits with an error when anything needs attention. It only reports: open each new page before adding it to a collection in `src/projects.js`, or add it to `scripts/project-audit-exclusions.js` with a reason if it isn’t a gallery project. A typical refresh is `npm run audit:projects`, update the data, then `npm run previews:sites && npm run previews:capture`.
-
-## Preview images
-
-The student directory also uses local screenshots for immediate hover and keyboard-focus previews, with a thin border and no shadow. Screenshots are captured at a consistent 1440 × 900 desktop viewport. Press Escape to dismiss a preview; selecting a student's name still opens their live site. On touch devices, names open sites directly.
-
-Refresh directory screenshots with `npm run previews:sites` (or append a quoted student name to refresh just that site). Images live in `public/previews/sites/`; the capture report is saved to ignored `output/site-previews/captures.json`. Refresh them after students update their homepages.
-
-Previews are local JPEG screenshots, not live embeds. This keeps the grid fast and avoids loading every project's animations, WebGL, or audio. Clicking a preview opens the live project in a new tab. Missing images show a fallback with a working project link.
-
-With Google Chrome installed, generate or refresh previews:
-
-```sh
-npm run previews:capture
-```
-
-The capture script visits the curated project URLs, writes images to `public/previews/`, and saves its success/failure report to ignored `output/week-gallery/captures.json`. Commit the images alongside project data. Captures are refreshed manually; they do not update automatically when students change their sites.
-
-## Run and check
-
-```sh
-npm install
+```bash
 npm run dev
-npm run build
-npm test
 ```
 
-Browser checks use Playwright with locally installed Google Chrome. They cover filtering, shared URLs, browser history, the student directory, missing images, mobile layout, keyboard access, and palette switching.
+Open [http://localhost:3000](http://localhost:3000) with your browser.
+
+To test on your iPhone on the same Wi-Fi network, open the network URL displayed in the terminal (e.g. `http://<your-ip>:3000`).
